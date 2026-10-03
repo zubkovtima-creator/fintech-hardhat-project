@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <title>Product Registry</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 1100px; margin: 20px auto; padding: 0 16px; }
+    h1, h2 { color: #222; }
+    form { background: #f4f4f4; padding: 16px; border-radius: 8px; margin-bottom: 24px; }
+    form label { display: block; margin-top: 10px; font-weight: bold; }
+    form input, form textarea { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+    button { margin-top: 14px; padding: 10px 20px; background: #2e7d32; color: white; border: 0; border-radius: 4px; cursor: pointer; }
+    button:hover { background: #1b5e20; }
+    button:disabled { background: #999; cursor: not-allowed; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; }
+    th { background: #2e7d32; color: white; }
+    img { max-width: 100px; max-height: 100px; border-radius: 4px; }
+    .status { margin-left: 12px; font-style: italic; color: #666; }
+    code { background: #eee; padding: 2px 6px; border-radius: 3px; }
+    .banner { padding: 10px; margin-bottom: 16px; border-radius: 4px; }
+    .banner.ok  { background: #e8f5e9; border-left: 4px solid #2e7d32; }
+    .banner.warn { background: #fff3cd; border-left: 4px solid #ffc107; }
+  </style>
+</head>
+<body>
+  <h1>Product Registry</h1>
+
+  <div class="banner" id="banner">Ініціалізація...</div>
+
+  <p>Контракт: <code id="contractAddr">—</code></p>
+  <p>Акаунт: <code id="account">—</code></p>
+
+  <h2>Створити новий продукт</h2>
+  <form id="createForm">
+    <label>Назва продукту</label>
+    <input type="text" id="name" required />
+
+    <label>Опис</label>
+    <textarea id="description" rows="3" required></textarea>
+
+    <label>Ціна (ETH)</label>
+    <input type="number" id="price" step="0.0001" min="0" required />
+
+    <label>URL картинки</label>
+    <input type="url" id="imageUrl" placeholder="https://picsum.photos/200" required />
+
+    <button type="submit" id="createBtn">Створити</button>
+    <span class="status" id="status"></span>
+  </form>
+
+  <h2>Список продуктів</h2>
+  <button id="refreshBtn">Оновити</button>
+  <table>
+    <thead>
+      <tr>
+        <th>Назва</th>
+        <th>Опис</th>
+        <th>Ціна (ETH)</th>
+        <th>Адреса акаунта</th>
+        <th>Дата створення</th>
+        <th>Картинка</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.2/dist/ethers.umd.min.js"></script>
+  <script>
+    // ============== НАСТРОЙКИ ==============
+    const CONTRACT_ADDRESS = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
+    const RPC_URL = "http://127.0.0.1:8545";
+    // Резервный ключ Account #0 из `npx hardhat node`, если MetaMask недоступен.
+    const FALLBACK_PRIVATE_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+
+    const ABI = [
+      "function createProduct(string _name, string _description, uint256 _price, string _imageUrl) external",
+      "function getAllProducts() external view returns (tuple(string name, string description, uint256 price, address creator, uint256 createdAt, string imageUrl)[])",
+      "function getProductsCount() external view returns (uint256)"
+    ];
+    // =======================================
+
+    let provider, signer, contract;
+
+    function setBanner(text, cls) {
+      const b = document.getElementById("banner");
+      b.className = "banner " + cls;
+      b.textContent = text;
+    }
+
+    async function init() {
+      try {
+        if (window.ethereum) {
+          // === Режим 1: MetaMask ===
+          setBanner("MetaMask знайдено. Запит на підключення...", "warn");
+
+          await window.ethereum.request({ method: "eth_requestAccounts" });
+          provider = new ethers.BrowserProvider(window.ethereum);
+          signer   = await provider.getSigner();
+
+          // Проверим, что сеть действительно Hardhat Local (chainId 31337)
+          const net = await provider.getNetwork();
+          if (Number(net.chainId) !== 31337) {
+            throw new Error("MetaMask підключено до іншої мережі. Очікується Chain ID 31337 (Hardhat Local).");
+          }
+
+          setBanner("✔ Підключено через MetaMask. Мережа: Hardhat Local (31337).", "ok");
+        } else {
+          throw new Error("MetaMask не знайдено");
+        }
+      } catch (e) {
+        // === Режим 2: прямой JSON-RPC ===
+        console.warn("MetaMask недоступен, переключаемся на прямой JSON-RPC:", e.message);
+        setBanner("MetaMask недоступний. Використовується прямий JSON-RPC до " + RPC_URL + ".", "warn");
+        provider = new ethers.JsonRpcProvider(RPC_URL);
+        signer   = new ethers.Wallet(FALLBACK_PRIVATE_KEY, provider);
+      }
+
+      try {
+        contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+
+        const addr = await signer.getAddress();
+        document.getElementById("account").textContent = addr;
+        document.getElementById("contractAddr").textContent = CONTRACT_ADDRESS;
+
+        await loadProducts();
+      } catch (e) {
+        console.error(e);
+        document.getElementById("status").textContent = "Помилка ініціалізації: " + e.message;
+      }
+    }
+
+    async function loadProducts() {
+      const tbody = document.getElementById("tbody");
+      tbody.innerHTML = "";
+      try {
+        const items = await contract.getAllProducts();
+        if (items.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#888">Поки що продуктів немає</td></tr>`;
+          return;
+        }
+        items.forEach((p) => {
+          const tr = document.createElement("tr");
+          const priceEth = ethers.formatEther(p.price);
+          const date = new Date(Number(p.createdAt) * 1000).toLocaleString();
+          tr.innerHTML = `
+            <td>${escapeHtml(p.name)}</td>
+            <td>${escapeHtml(p.description)}</td>
+            <td>${priceEth}</td>
+            <td><code>${p.creator}</code></td>
+            <td>${date}</td>
+            <td><img src="${escapeHtml(p.imageUrl)}" alt="img" onerror="this.style.display='none'" /></td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (e) {
+        console.error(e);
+        tbody.innerHTML = `<tr><td colspan="6" style="color:red">Помилка: ${e.message}</td></tr>`;
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[c]));
+    }
+
+    document.getElementById("createForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const status = document.getElementById("status");
+      const btn = document.getElementById("createBtn");
+      btn.disabled = true;
+      status.textContent = "Надсилаємо транзакцію...";
+      try {
+        const name        = document.getElementById("name").value.trim();
+        const description = document.getElementById("description").value.trim();
+        const priceEth    = document.getElementById("price").value;
+        const imageUrl    = document.getElementById("imageUrl").value.trim();
+        const priceWei    = ethers.parseEther(priceEth);
+
+        const tx = await contract.createProduct(name, description, priceWei, imageUrl);
+        await tx.wait();
+
+        status.textContent = "✔ Створено (tx: " + tx.hash.slice(0, 10) + "...)";
+        document.getElementById("createForm").reset();
+        await loadProducts();
+      } catch (err) {
+        console.error(err);
+        status.textContent = "✖ Помилка: " + (err.shortMessage || err.message);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById("refreshBtn").addEventListener("click", loadProducts);
+    window.addEventListener("load", init);
+  </script>
+</body>
+</html>
