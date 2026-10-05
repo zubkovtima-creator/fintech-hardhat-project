@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <title>Social Posts (Hardhat)</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, "Segoe UI", Arial, sans-serif; background:#f0f2f5; margin:0; padding:20px; color:#1c1e21; }
+    h1 { margin-top:0; }
+    .container { max-width: 720px; margin: 0 auto; }
+    .card { background:#fff; border-radius:12px; padding:16px; margin-bottom:16px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+    .author { font-weight:600; color:#1877f2; word-break:break-all; font-size:13px; }
+    .date { color:#65676b; font-size:12px; }
+    .content { font-size:15px; line-height:1.5; margin:8px 0; white-space:pre-wrap; word-break:break-word; }
+    .post-image { width:100%; border-radius:8px; margin-top:8px; }
+    .actions { display:flex; gap:8px; margin-top:12px; align-items:center; }
+    button { padding:8px 14px; border:0; border-radius:6px; cursor:pointer; font-weight:600; font-size:13px; }
+    .btn-primary   { background:#1877f2; color:#fff; }
+    .btn-primary:hover { background:#166fe5; }
+    .btn-secondary { background:#e4e6eb; color:#050505; }
+    .btn-danger    { background:#e41e3f; color:#fff; }
+    .btn-danger:hover { background:#c81c37; }
+    .btn-like      { background:#e4e6eb; color:#050505; }
+    .btn-like.liked { background:#1877f2; color:#fff; }
+    .btn-like:disabled { opacity:0.6; cursor:not-allowed; }
+    input[type=text], textarea, input[type=url] {
+      width:100%; padding:10px; border:1px solid #ccd0d5; border-radius:8px;
+      font-size:14px; font-family:inherit; margin-bottom:8px;
+    }
+    textarea { resize:vertical; min-height:70px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; }
+    .row > * { flex: 1; min-width:180px; }
+    .top-bar { display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; }
+    .badge { background:#1877f2; color:#fff; padding:2px 8px; border-radius:12px; font-size:12px; margin-left:6px; }
+    .empty { color:#65676b; text-align:center; padding:24px; font-style:italic; }
+    .filter-row { display:flex; gap:8px; margin-bottom:16px; }
+    .filter-row button { flex:1; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>📝 Social Posts</h1>
+  <p style="font-size:13px; color:#65676b">Contract: <code id="contractAddr">—</code></p>
+  <p style="font-size:13px; color:#65676b">Account:  <code id="account">—</code></p>
+
+  <!-- ==== Форма створення поста ==== -->
+  <div class="card">
+    <h3 style="margin-top:0">Створити новий пост</h3>
+    <textarea id="newContent" placeholder="Що нового?"></textarea>
+    <input type="url" id="newImage" placeholder="URL картинки (необов'язково)" />
+    <div class="row">
+      <button class="btn-primary" id="btnCreate">Опублікувати</button>
+      <button class="btn-danger" id="btnDeleteAll" title="Видалити УСІ свої пости">🗑 Видалити всі мої пости</button>
+    </div>
+    <div id="status" style="margin-top:8px; font-size:13px; color:#65676b;"></div>
+  </div>
+
+  <!-- ==== Фильтр ==== -->
+  <div class="filter-row">
+    <button class="btn-primary"  id="filterAll">🌐 Усі пости</button>
+    <button class="btn-secondary" id="filterMine">👤 Лише мої</button>
+  </div>
+
+  <!-- ==== Лента ==== -->
+  <div id="feed"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.2/dist/ethers.umd.min.js"></script>
+<script>
+  // ============ НАСТРОЙКИ ============
+  const CONTRACT_ADDRESS = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
+  const RPC_URL = "http://127.0.0.1:8545";
+  const FALLBACK_PRIVATE_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"; // Account #0
+
+  const ABI = [
+    "function createPost(string _content, string _imageUrl) external",
+    "function deletePost(uint256 _id) external",
+    "function deleteAllMyPosts() external",
+    "function likePost(uint256 _id) external",
+    "function unlikePost(uint256 _id) external",
+    "function getAllPosts() external view returns (tuple(uint256 id, address author, string content, string imageUrl, uint256 createdAt, uint256 likes)[])",
+    "function getPostsByAuthor(address _author) external view returns (tuple(uint256 id, address author, string content, string imageUrl, uint256 createdAt, uint256 likes)[])",
+    "function hasLiked(uint256, address) external view returns (bool)"
+  ];
+  // ===================================
+
+  let provider, signer, contract, myAddress;
+  let currentFilter = "all";
+
+  function setStatus(text) {
+    document.getElementById("status").textContent = text;
+  }
+
+  async function init() {
+    try {
+      if (window.ethereum) {
+        await window.ethereum.request({ method: "eth_requestAccounts" });
+        provider = new ethers.BrowserProvider(window.ethereum);
+        signer   = await provider.getSigner();
+        const net = await provider.getNetwork();
+        if (Number(net.chainId) !== 31337) throw new Error("not 31337");
+      } else {
+        throw new Error("no metamask");
+      }
+      setStatus("✔ Підключено через MetaMask.");
+    } catch {
+      provider = new ethers.JsonRpcProvider(RPC_URL);
+      signer   = new ethers.Wallet(FALLBACK_PRIVATE_KEY, provider);
+      setStatus("ℹ Використовується прямий JSON-RPC до " + RPC_URL);
+    }
+
+    contract  = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+    myAddress = await signer.getAddress();
+    document.getElementById("account").textContent = myAddress;
+    document.getElementById("contractAddr").textContent = CONTRACT_ADDRESS;
+
+    await loadFeed();
+  }
+
+  async function loadFeed() {
+    const feed = document.getElementById("feed");
+    feed.innerHTML = "Завантаження...";
+    try {
+      const raw = currentFilter === "mine"
+        ? await contract.getPostsByAuthor(myAddress)
+        : await contract.getAllPosts();
+
+      const zero = "0x0000000000000000000000000000000000000000";
+      const posts = raw.filter(p => p.author.toLowerCase() !== zero && p.author !== zero);
+
+      // Сортируем: новые сверху
+      const sorted = [...posts].sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
+
+      if (posts.length === 0) {
+        feed.innerHTML = `<div class="empty">Тут поки що порожньо.</div>`;
+        return;
+      }
+
+      feed.innerHTML = "";
+      for (const p of sorted) {
+        feed.appendChild(await renderCard(p));
+      }
+    } catch (e) {
+      console.error(e);
+      feed.innerHTML = `<div class="empty" style="color:#e41e3f">Помилка: ${e.message}</div>`;
+    }
+  }
+
+  async function renderCard(p) {
+    const isMine = p.author.toLowerCase() === myAddress.toLowerCase();
+    const liked  = await contract.hasLiked(p.id, myAddress);
+
+    const div = document.createElement("div");
+    div.className = "card";
+    const date = new Date(Number(p.createdAt) * 1000).toLocaleString();
+    div.innerHTML = `
+      <div class="card-header">
+        <span class="author">${isMine ? "👤 Ви" : p.author}</span>
+        <span class="date">${date}</span>
+      </div>
+      <div class="content">${escapeHtml(p.content)}</div>
+      ${p.imageUrl ? `<img class="post-image" src="${escapeHtml(p.imageUrl)}" onerror="this.style.display='none'">` : ""}
+      <div class="actions">
+        <button class="btn-like ${liked ? "liked" : ""}" data-action="like">
+          ❤ ${p.likes}
+        </button>
+        ${isMine ? `<button class="btn-danger" data-action="delete">🗑 Видалити</button>` : ""}
+      </div>
+    `;
+
+    div.querySelector('[data-action="like"]').addEventListener("click", async () => {
+      try {
+        setStatus("Надсилаємо транзакцію...");
+        const tx = liked
+          ? await contract.unlikePost(p.id)
+          : await contract.likePost(p.id);
+        await tx.wait();
+        setStatus("✔ Готово");
+        await loadFeed();
+      } catch (e) {
+        console.error(e);
+        setStatus("✖ " + (e.shortMessage || e.message));
+      }
+    });
+
+    if (isMine) {
+      div.querySelector('[data-action="delete"]').addEventListener("click", async () => {
+        if (!confirm("Видалити цей пост?")) return;
+        try {
+          setStatus("Видаляємо...");
+          const tx = await contract.deletePost(p.id);
+          await tx.wait();
+          setStatus("✔ Пост видалено");
+          await loadFeed();
+        } catch (e) {
+          console.error(e);
+          setStatus("✖ " + (e.shortMessage || e.message));
+        }
+      });
+    }
+
+    return div;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+  }
+
+  // Кнопки
+  document.getElementById("btnCreate").addEventListener("click", async () => {
+    const content = document.getElementById("newContent").value.trim();
+    const imageUrl = document.getElementById("newImage").value.trim();
+    if (!content) return setStatus("✖ Порожній текст");
+
+    try {
+      setStatus("Публікуємо...");
+      const tx = await contract.createPost(content, imageUrl);
+      await tx.wait();
+      document.getElementById("newContent").value = "";
+      document.getElementById("newImage").value = "";
+      setStatus("✔ Опубліковано");
+      await loadFeed();
+    } catch (e) {
+      console.error(e);
+      setStatus("✖ " + (e.shortMessage || e.message));
+    }
+  });
+
+  document.getElementById("btnDeleteAll").addEventListener("click", async () => {
+    if (!confirm("Видалити УСІ ваші пости?")) return;
+    try {
+      setStatus("Видаляємо...");
+      const tx = await contract.deleteAllMyPosts();
+      await tx.wait();
+      setStatus("✔ Усі пости видалено");
+      await loadFeed();
+    } catch (e) {
+      console.error(e);
+      setStatus("✖ " + (e.shortMessage || e.message));
+    }
+  });
+
+  document.getElementById("filterAll").addEventListener("click", async () => {
+    currentFilter = "all";
+    await loadFeed();
+  });
+  document.getElementById("filterMine").addEventListener("click", async () => {
+    currentFilter = "mine";
+    await loadFeed();
+  });
+
+  window.addEventListener("load", init);
+</script>
+</body>
+</html>

@@ -84,3 +84,17 @@ npx http-server frontend -p 3000
     ✔ при снятии генерируется событие с адресом и суммой
 
   8 passing
+
+
+### 3. SocialPosts — социальная лента
+
+Контракт `contracts/SocialPosts.sol` + фронтенд `frontend/social.html` реализуют мини-соцсеть:
+
+- создание постов (текст + URL картинки);
+- фильтрация по автору — кнопка «Лише мої» (`getPostsByAuthor`);
+- лайки / снятие лайков (`likePost` / `unlikePost`, mapping `hasLiked`);
+- удаление своего поста (`deletePost`);
+- удаление всех своих постов (`deleteAllMyPosts`);
+- визуал: карточки с тенью, цветные кнопки, поля ввода.
+
+Тесты: `test/SocialPosts.test.js` — 7 passing.
