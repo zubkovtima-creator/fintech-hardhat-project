@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <title>Media Gallery (Hardhat)</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, "Segoe UI", Arial, sans-serif; background:#eef1f5; margin:0; padding:24px; color:#1c1e21; }
+    h1 { margin:0 0 4px; }
+    .container { max-width: 1100px; margin:0 auto; }
+    .subtitle { color:#65676b; font-size:13px; margin-bottom:20px; }
+
+    /* Форма */
+    .form-card { background:#fff; border-radius:14px; padding:20px;
+                 box-shadow:0 2px 8px rgba(0,0,0,.06); margin-bottom:24px; }
+    .form-card h2 { margin:0 0 14px; font-size:18px; }
+    .form-row { display:grid; grid-template-columns:1fr 2fr auto; gap:10px; align-items:start; }
+    @media (max-width:720px) { .form-row { grid-template-columns:1fr; } }
+    input[type=text], input[type=url] {
+      width:100%; padding:11px 13px; border:1px solid #ccd0d5; border-radius:10px;
+      font-size:14px; font-family:inherit; outline:none; transition:.2s;
+    }
+    input:focus { border-color:#1877f2; box-shadow:0 0 0 3px rgba(24,119,242,.15); }
+    button { padding:11px 18px; border:0; border-radius:10px; font-weight:600;
+             font-size:14px; cursor:pointer; transition:.15s; white-space:nowrap; }
+    .btn-primary { background:#1877f2; color:#fff; }
+    .btn-primary:hover { background:#166fe5; }
+    .btn-danger  { background:#e41e3f; color:#fff; }
+    .btn-danger:hover { background:#c81c37; }
+    .btn-ghost   { background:#e4e6eb; color:#050505; }
+    .btn-ghost:hover { background:#d8dadf; }
+
+    /* Сетка карточек */
+    .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:16px; }
+    .media-card { background:#fff; border-radius:14px; overflow:hidden;
+                  box-shadow:0 2px 10px rgba(0,0,0,.08);
+                  display:flex; flex-direction:column;
+                  transition:transform .15s; }
+    .media-card:hover { transform:translateY(-3px); }
+    .media-card img { width:100%; height:180px; object-fit:cover; background:#ddd; display:block; }
+    .media-card .body { padding:12px 14px; flex:1; display:flex; flex-direction:column; gap:6px; }
+    .media-card .title { font-weight:600; font-size:15px; word-break:break-word; }
+    .media-card .meta { color:#65676b; font-size:12px; }
+    .media-card .owner { color:#1877f2; font-size:12px; word-break:break-all; }
+    .media-card .actions { margin-top:auto; padding-top:8px; }
+    .empty { color:#65676b; text-align:center; padding:40px; font-style:italic;
+             background:#fff; border-radius:14px; }
+    .status { margin-left:12px; font-size:13px; color:#65676b; }
+    code { background:#eef1f5; padding:2px 6px; border-radius:4px; font-size:12px; }
+    .toolbar { display:flex; gap:8px; margin-bottom:16px; align-items:center; flex-wrap:wrap; }
+    .badge { background:#1877f2; color:#fff; padding:3px 10px; border-radius:12px; font-size:12px; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>🖼 Media Gallery</h1>
+  <div class="subtitle">
+    Contract: <code id="contractAddr">—</code> &nbsp;|&nbsp;
+    Account: <code id="account">—</code>
+  </div>
+
+  <!-- Форма добавления -->
+  <div class="form-card">
+    <h2>Додати зображення</h2>
+    <div class="form-row">
+      <input type="text" id="title" placeholder="Назва (наприклад: Захід сонця)" />
+      <input type="url"  id="imageUrl" placeholder="https://picsum.photos/400/300" />
+      <button class="btn-primary" id="btnAdd">➕ Додати</button>
+    </div>
+    <div id="status" class="status"></div>
+  </div>
+
+  <!-- Тулбар -->
+  <div class="toolbar">
+    <button class="btn-ghost" id="btnRefresh">🔄 Оновити</button>
+    <span class="badge" id="countBadge">0 зображень</span>
+  </div>
+
+  <!-- Сетка -->
+  <div id="grid" class="grid"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.2/dist/ethers.umd.min.js"></script>
+<script>
+  // ============ НАСТРОЙКИ ============
+  const CONTRACT_ADDRESS = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
+  const RPC_URL = "http://127.0.0.1:8545";
+  const FALLBACK_PRIVATE_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+
+  const ABI = [
+    "function addMedia(string _title, string _imageUrl) external",
+    "function deleteMedia(uint256 _id) external",
+    "function getActiveMedia() external view returns (tuple(uint256 id, address owner, string title, string imageUrl, uint256 createdAt, bool isDeleted)[])",
+    "function getAllMedia() external view returns (tuple(uint256 id, address owner, string title, string imageUrl, uint256 createdAt, bool isDeleted)[])",
+    "function getMediaCount() external view returns (uint256)"
+  ];
+  // ===================================
+
+  let provider, signer, contract, myAddress;
+
+  function setStatus(text) { document.getElementById("status").textContent = text; }
+
+  async function init() {
+    try {
+      if (window.ethereum) {
+        await window.ethereum.request({ method: "eth_requestAccounts" });
+        provider = new ethers.BrowserProvider(window.ethereum);
+        signer   = await provider.getSigner();
+        const net = await provider.getNetwork();
+        if (Number(net.chainId) !== 31337) throw new Error("wrong chain");
+        setStatus("✔ Підключено через MetaMask");
+      } else {
+        throw new Error("no metamask");
+      }
+    } catch {
+      provider = new ethers.JsonRpcProvider(RPC_URL);
+      signer   = new ethers.Wallet(FALLBACK_PRIVATE_KEY, provider);
+      setStatus("ℹ Прямий JSON-RPC до " + RPC_URL);
+    }
+
+    contract  = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+    myAddress = await signer.getAddress();
+    document.getElementById("account").textContent = myAddress;
+    document.getElementById("contractAddr").textContent = CONTRACT_ADDRESS;
+
+    await loadGallery();
+  }
+
+  async function loadGallery() {
+    const grid = document.getElementById("grid");
+    grid.innerHTML = "Завантаження...";
+    try {
+      const raw = await contract.getActiveMedia();
+      const items = Array.from(raw);
+
+      document.getElementById("countBadge").textContent = items.length + " зображень";
+
+      if (items.length === 0) {
+        grid.innerHTML = `<div class="empty" style="grid-column:1/-1">Ще немає зображень. Додайте перше!</div>`;
+        return;
+      }
+
+      // Новые сверху
+      const sorted = [...items].sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
+
+      grid.innerHTML = "";
+      for (const m of sorted) {
+        grid.appendChild(renderCard(m));
+      }
+    } catch (e) {
+      console.error(e);
+      grid.innerHTML = `<div class="empty" style="grid-column:1/-1; color:#e41e3f">Помилка: ${e.message}</div>`;
+    }
+  }
+
+  function renderCard(m) {
+    const isOwner = m.owner.toLowerCase() === myAddress.toLowerCase();
+    const div = document.createElement("div");
+    div.className = "media-card";
+
+    const date = new Date(Number(m.createdAt) * 1000).toLocaleString();
+
+    div.innerHTML = `
+      <img src="${escapeHtml(m.imageUrl)}" alt="${escapeHtml(m.title)}"
+           onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22400%22 height=%22200%22><rect fill=%22%23ddd%22 width=%22400%22 height=%22200%22/><text x=%2250%%22 y=%2250%%22 fill=%22%23888%22 font-size=%2216%22 text-anchor=%22middle%22>зображення недоступне</text></svg>'" />
+      <div class="body">
+        <div class="title">${escapeHtml(m.title || "(без назви)")}</div>
+        <div class="owner">👤 ${isOwner ? "Ви" : m.owner}</div>
+        <div class="meta">${date}</div>
+        <div class="actions">
+          ${isOwner
+            ? `<button class="btn-danger" data-action="delete">🗑 Видалити</button>`
+            : `<button class="btn-ghost" disabled>не ваш об'єкт</button>`}
+        </div>
+      </div>
+    `;
+
+    if (isOwner) {
+      div.querySelector('[data-action="delete"]').addEventListener("click", async () => {
+        if (!confirm("Помітити це зображення як видалене?")) return;
+        try {
+          setStatus("Видаляємо...");
+          const tx = await contract.deleteMedia(m.id);
+          await tx.wait();
+          setStatus("✔ Зображення видалено");
+          await loadGallery();   // ← автообновление после удаления
+        } catch (e) {
+          console.error(e);
+          setStatus("✖ " + (e.shortMessage || e.message));
+        }
+      });
+    }
+
+    return div;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+  }
+
+  document.getElementById("btnAdd").addEventListener("click", async () => {
+    const title = document.getElementById("title").value.trim();
+    const imageUrl = document.getElementById("imageUrl").value.trim();
+
+    if (!imageUrl) { setStatus("✖ URL картинки обов'язковий"); return; }
+
+    try {
+      setStatus("Додаємо...");
+      const tx = await contract.addMedia(title, imageUrl);
+      await tx.wait();
+      document.getElementById("title").value = "";
+      document.getElementById("imageUrl").value = "";
+      setStatus("✔ Додано");
+      await loadGallery();   // ← автообновление после добавления
+    } catch (e) {
+      console.error(e);
+      setStatus("✖ " + (e.shortMessage || e.message));
+    }
+  });
+
+  document.getElementById("btnRefresh").addEventListener("click", loadGallery);
+
+  window.addEventListener("load", init);
+</script>
+</body>
+</html>

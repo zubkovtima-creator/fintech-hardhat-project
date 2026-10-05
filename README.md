@@ -98,3 +98,17 @@ npx http-server frontend -p 3000
 - визуал: карточки с тенью, цветные кнопки, поля ввода.
 
 Тесты: `test/SocialPosts.test.js` — 7 passing.
+
+
+### 4. MediaGallery — медиа-галерея
+
+Контракт `contracts/MediaGallery.sol` + фронтенд `frontend/gallery.html`:
+
+- объекты Media: id, owner, title, imageUrl, createdAt, флаг `isDeleted`;
+- добавление зображений (`addMedia`);
+- мягкое удаление через флаг (`deleteMedia` — только владелец);
+- `getActiveMedia()` возвращает только неудалённые объекты;
+- фронтенд: карточки с картинкой, названием, автором и датой; кнопка 🗑;
+- автообновление сетки после добавления и удаления.
+
+Тесты: `test/MediaGallery.test.js` — 7 passing.
